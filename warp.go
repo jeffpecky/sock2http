@@ -385,7 +385,10 @@ func extractWireproxyBinary(archive []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read wireproxy archive: %w", err)
 		}
-		if strings.EqualFold(filepath.Base(strings.ReplaceAll(header.Name, "\\", "/")), "wireproxy.exe") &&
+		// Linux archives carry the un-suffixed `wireproxy`; Windows carries
+		// `wireproxy.exe`. Accept either case-insensitively.
+		base := filepath.Base(strings.ReplaceAll(header.Name, "\\", "/"))
+		if (strings.EqualFold(base, "wireproxy.exe") || strings.EqualFold(base, "wireproxy")) &&
 			header.Typeflag == tar.TypeReg {
 			if header.Size <= 0 || header.Size > maxBinarySize {
 				return nil, fmt.Errorf("wireproxy executable has invalid size %d", header.Size)
@@ -400,7 +403,7 @@ func extractWireproxyBinary(archive []byte) ([]byte, error) {
 			return binary, nil
 		}
 	}
-	return nil, fmt.Errorf("wireproxy.exe not found in release archive")
+	return nil, fmt.Errorf("wireproxy executable not found in release archive")
 }
 
 func writeExecutable(path string, data []byte) error {

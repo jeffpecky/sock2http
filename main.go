@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,18 @@ func removeHopHeaders(h http.Header) {
 }
 
 func main() {
+	// Collect the raw argv BEFORE parsing: `-service install` is a flag value,
+	// not a separator — `-service install -warp -laddr 0.0.0.0:8001` must bake
+	// the same flags into the service's command line, and flag.Args() would be
+	// empty because the Go flag package stops at args it knows and calls only
+	// the leftovers "arguments". Everything after the literal "install" token
+	// is the service definition, verbatim.
+	installFlags := []string{}
+	if idx := slices.Index(os.Args, "-service"); idx >= 0 &&
+		idx+1 < len(os.Args) && os.Args[idx+1] == "install" {
+		installFlags = os.Args[idx+2:]
+	}
+
 	flag.Parse()
 
 	if *svcRun {
@@ -63,7 +76,7 @@ func main() {
 	switch *svcFlag {
 	case "":
 	case "install":
-		if err := installService(flag.Args()); err != nil {
+		if err := installService(installFlags); err != nil {
 			log.Fatal(err)
 		}
 		return

@@ -140,9 +140,6 @@ func run() error {
 	var pool *egressPool
 	switch {
 	case *warp:
-		if usernameSet || passwordSet {
-			return fmt.Errorf("-u and -p are for SOCKS5 upstream authentication and cannot be combined with -warp")
-		}
 		wm, werr := startWarpManager(ctx, *promptWarpTerms)
 		if werr != nil {
 			return werr
@@ -151,9 +148,6 @@ func run() error {
 		cd = wm.upstream()
 		defer wm.stop()
 	case *codespace:
-		if usernameSet || passwordSet {
-			return fmt.Errorf("-u and -p are for SOCKS5 upstream authentication and cannot be combined with -codespace")
-		}
 		tokens := parseTokens(*csTokens)
 		cs, cerr := startCodespace(ctx, *csRepo, *csMachine, tokens)
 		if cerr != nil {
@@ -199,12 +193,17 @@ func run() error {
 	if publicListen && !(*warp || *codespace) && (usernameSet || passwordSet) {
 		return fmt.Errorf("-u and -p authenticate the upstream SOCKS5; listener credentials for a public listen are set with proxyUser/proxyPass in the config")
 	}
-	// In codespace/warp mode on a public listen, -u/-p are the listener
-	// credentials (nothing upstream to authenticate against).
+	// In codespace/warp mode -u/-p are never upstream auth: on a public listen
+	// they are the listener credentials (validated together below); on a
+	// loopback listen there is no listener auth to configure, so passing them
+	// is a mistake we refuse instead of silently ignoring.
 	publicModeTunnel := *warp || *codespace
 	if publicModeTunnel {
 		if usernameSet != passwordSet {
 			return fmt.Errorf("listener credentials: -u and -p must be used together")
+		}
+		if (usernameSet || passwordSet) && !publicListen {
+			return fmt.Errorf("-u and -p authenticate a PUBLIC proxy listen; this listen is loopback, so a tunnel mode has no listener credentials to set — drop them")
 		}
 	}
 

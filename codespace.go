@@ -341,7 +341,15 @@ func checkGH() error {
 
 // provision creates a codespace (optionally reusing one) and brings up its
 // SOCKS5 tunnel, verifying that it actually carries traffic.
+//
+// Tunnel ownership is the process lifetime, not the caller's: rotation calls
+// this from inside an HTTP handler whose context dies the moment the rotate
+// response is written, and exec.CommandContext would kill the fresh
+// `gh codespace ssh` right after it — dead proxy until a manual restart.
+// The gh API calls below may still use the caller's context (they are one
+// shots), but the long-lived ssh child gets the detached owner context.
 func (m *codespaceManager) provision(ctx context.Context, exclude string) (*codespaceTunnel, error) {
+	owner := context.WithoutCancel(ctx)
 	name, err := m.pickOrCreate(ctx, exclude)
 	if err != nil {
 		return nil, err
@@ -355,7 +363,7 @@ func (m *codespaceManager) provision(ctx context.Context, exclude string) (*code
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", "codespace", "ssh", "--codespace", name, "--",
+	cmd := exec.CommandContext(owner, "gh", "codespace", "ssh", "--codespace", name, "--",
 		"-D", port,
 		"-N",
 		"-o", "ServerAliveInterval=30",
@@ -377,7 +385,7 @@ func (m *codespaceManager) provision(ctx context.Context, exclude string) (*code
 
 	t := &codespaceTunnel{name: name, port: port, cmd: cmd, done: done}
 
-	if err := waitForPort(ctx, port, done, codespaceTunnelTimeout); err != nil {
+	if err := waitForPort(owner, port, done, codespaceTunnelTimeout); err != nil {
 		t.stop()
 		return nil, fmt.Errorf("codespace %s: %w", name, err)
 	}
@@ -387,7 +395,9 @@ func (m *codespaceManager) provision(ctx context.Context, exclude string) (*code
 		t.stop()
 		return nil, err
 	}
-	eg, err := probeEgress(ctx, d)
+	// Probe under the owner context too: a cancelled request context aborting
+	// the verification would stop() a healthy tunnel mid-handshake.
+	eg, err := probeEgress(owner, d)
 	if err != nil {
 		t.stop()
 		return nil, fmt.Errorf("verify codespace %s egress: %w", name, err)

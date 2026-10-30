@@ -209,13 +209,22 @@ func (w *warpManager) rotate(ctx context.Context) (string, string, error) {
 	dialer := w.dialer
 	oldCleanup := w.cleanup
 
+	// The rotate request's context dies the moment the HTTP handler returns
+	// its response, and startWarp binds every spawned wireproxy to the context
+	// it is given (exec.CommandContext). Spawning under the request context
+	// would kill the replacement tunnel right after "rotated" is written —
+	// dead proxy until a manual restart. Spawn detached: ownership stays with
+	// cleanup()/stop(), never with the request. Steps remain bounded by their
+	// own timeouts (startup, probe, listener wait).
+	spawn := context.WithoutCancel(ctx)
+
 	// Start the replacement before retiring the current tunnel, so a failed
 	// restart does not leave us without any egress.
-	d, newCleanup, err := startWarp(ctx, false)
+	d, newCleanup, err := startWarp(spawn, false)
 	if err != nil {
 		return oldIP, "", fmt.Errorf("WARP restart failed: %w", err)
 	}
-	eg, probeErr := probeEgress(ctx, d)
+	eg, probeErr := probeEgress(spawn, d)
 	if probeErr != nil {
 		newCleanup()
 		return oldIP, "", fmt.Errorf("WARP restart probe failed: %v", probeErr)

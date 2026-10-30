@@ -1,0 +1,409 @@
+<!doctype html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>sock2http admin</title>
+<style>
+  /* Design tokens — dark-first terminal panel. Graphite neutral with green
+     (network-up) accent; red reserved for down/never, amber for warnings. */
+  :root {
+    --bg: #16181d;
+    --panel: #1d2026;
+    --panel-edge: #2b3038;
+    --fg: #e8eaf0;
+    --muted: #9199a8;
+    --accent: #4fd07a;
+    --accent-dim: #2c5b41;
+    --warn: #e0b34c;
+    --danger: #ef6a5a;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f4f5f7;
+      --panel: #ffffff;
+      --panel-edge: #dde1e8;
+      --fg: #1c2026;
+      --muted: #6a7383;
+      --accent: #1e7f45;
+      --accent-dim: #dcf3e5;
+      --warn: #9a7418;
+      --danger: #b23c2e;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --panel-edge: #dde1e8;
+    --fg: #1c2026;
+    --muted: #6a7383;
+    --accent: #1e7f45;
+    --accent-dim: #dcf3e5;
+    --warn: #9a7418;
+    --danger: #b23c2e;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+    padding: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 20px;
+    max-width: 720px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 18px; margin: 0 0 2px; letter-spacing: 0.01em; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 20px; font-family: var(--mono); }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .stat { min-width: 0; }
+  .stat .label { font-size: 12px; color: var(--muted); }
+  .stat .value { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 12px; font-weight: 600;
+    padding: 3px 10px; border-radius: 999px; border: 1px solid var(--accent-dim);
+    background: var(--accent-dim); color: var(--accent);
+  }
+  .pill.warp { color: var(--warn); border-color: var(--warn); background: transparent; }
+  .pill.down { color: var(--danger); border-color: var(--danger); background: transparent; }
+  /* IP family marker: which stack traffic actually leaves on. */
+  .proto {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 4px; margin-left: 4px;
+    border: 1px solid var(--panel-edge); color: var(--muted);
+  }
+  .proto.v4 { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
+  .proto.v6 { color: var(--warn); border-color: var(--warn); }
+  .addrs {
+    display: flex; flex-direction: column; gap: 3px; margin-top: 10px;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+  }
+  .addrs b { color: var(--fg); font-weight: 600; }
+  .ipcopy {
+    font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: 0.02em;
+    background: none; border: none; color: var(--fg); cursor: pointer; padding: 0;
+  }
+  .ipcopy:hover { color: var(--accent); }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #10130f;
+    border: none; border-radius: 8px; padding: 9px 16px;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.ghost {
+    background: transparent; color: var(--accent); border: 1px solid var(--accent-dim);
+  }
+  button.small { padding: 6px 12px; font-size: 12.5px; }
+  input[type="text"], input[type="password"], textarea {
+    width: 100%; font-family: var(--mono); font-size: 13px;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--panel-edge); border-radius: 8px; padding: 9px 11px;
+  }
+  textarea { min-height: 84px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent-dim); border-color: var(--accent-dim); }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .secret {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 13px;
+    background: var(--bg); border: 1px dashed var(--panel-edge);
+    border-radius: 8px; padding: 8px 10px; min-width: 0;
+  }
+  .secret code { overflow-wrap: anywhere; min-width: 0; }
+  #msg {
+    position: fixed; inset: auto 16px 16px auto; max-width: 340px;
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  #msg.err { border-color: var(--danger); }
+  .ok-dot { color: var(--accent); }
+  .gone { display: none; }
+</style>
+</head>
+<body>
+  <h1>sock2http</h1>
+  <p class="sub">egress proxy &amp; IP rotation console</p>
+
+  <!-- live status: the exit IP is the number this console exists for -->
+  <section>
+    <h2>Egress</h2>
+    <div class="row">
+      <div class="stat">
+        <div class="label">Upstream</div>
+        <div class="value" id="mode"><span class="pill down">…</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Exit IP <span class="proto" id="family">—</span></div>
+        <button class="ipcopy" id="exitIp" title="Copy exit IP">—</button>
+      </div>
+    </div>
+    <div class="addrs" id="addrs" hidden></div>
+    <div class="row" style="margin-top:12px">
+      <button id="rotateBtn" class="ghost">Rotate exit IP</button>
+      <button id="ipcheckBtn" class="ghost small">Verify</button>
+    </div>
+    <p class="hint">Rotation keeps serving on the old tunnel until a verified new one is up. In-flight requests stay on the tunnel that started them.</p>
+  </section>
+
+  <section>
+    <h2>Proxy authentication (public listen)</h2>
+    <p class="hint" style="margin-top:0">Required when sock2http binds a non-loopback address. Leave empty in loopback mode — no auth is asked locally.</p>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="proxyUser" placeholder="username" style="flex:1; min-width:140px">
+      <input type="password" id="proxyPass" placeholder="password" style="flex:1; min-width:140px">
+    </div>
+    <p class="hint">Same credentials can come from <code>-u/-p</code>, <code>SOCK2HTTP_PROXY_USER/_PASS</code>, or here. Takes effect on restart.</p>
+    <div class="row" style="margin-top:8px">
+      <button id="saveProxyBtn" style="margin-left:auto">Save</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Rotate hook (for 9router)</h2>
+    <p class="hint" style="margin-top:0">Point 9router's egress rotate settings at these. The URL goes in <code>egressRotateUrl</code>, the token in <code>egressRotateToken</code>.</p>
+    <div class="secret" style="margin-top:10px">
+      <code id="rotateUrl">—</code>
+      <button class="ghost small" data-copy="rotateUrl">Copy</button>
+    </div>
+    <div class="secret" style="margin-top:8px">
+      <code id="rotateToken" data-hidden="true">••••••••••••••••</code>
+      <button class="ghost small" id="tokenToggle">Reveal</button>
+      <button class="ghost small" data-copy="rotateToken">Copy</button>
+      <button class="ghost small" id="tokenGen">Regenerate</button>
+    </div>
+    <p class="hint">Stored in <code id="cfgPath"></code>. Regenerating is safe: save the new token into 9router when prompted.</p>
+  </section>
+
+  <section>
+    <h2>GitHub accounts (codespace mode)</h2>
+    <textarea id="ghTokens" placeholder="github_pat_… (one personal access token per line)"></textarea>
+    <p class="hint">One PAT per line. Each account's codespace quota is tried in order; when every line is exhausted, a fallback to WARP takes over if the toggle below is on.</p>
+    <div class="row" style="margin-top:10px">
+      <label class="row" style="gap:6px">
+        <input type="checkbox" id="csFallback" style="width:auto">
+        <span class="hint" style="margin:0">Fall back to WARP when accounts run out</span>
+      </label>
+      <button id="saveGhBtn" style="margin-left:auto">Save</button>
+    </div>
+  </section>
+
+  <script>
+  const $ = (id) => document.getElementById(id);
+  // Login flow: the first POST with X-Rotate-Token reflects a session cookie,
+  // which then authenticates everything else. The token itself is not kept in
+  // JS storage past login — sessionStorage only caches it until the cookie
+  // lands, then it is cleared.
+  const state = { token: (location.hash.match(/^#token=(.+)/) || [])[1] || sessionStorage.getItem("s2h_token") || "" };
+  if (state.token) { history.replaceState(null, "", location.pathname); }
+
+  // Login: try the existing session cookie first. Only prompt when the server
+  // says 403, so a reload with a live session never re-asks.
+  function promptLogin() {
+    const t = prompt("sock2http rotate token:");
+    if (t) { state.token = t; sessionStorage.setItem("s2h_token", t); }
+    return !!t;
+  }
+
+  async function api(action, body, retried) {
+    const headers = { "Content-Type": "application/json" };
+    if (state.token) headers["X-Rotate-Token"] = state.token;
+    // Same origin: the dashboard is served from its own port (2121), and the
+    // control API lives on that listener too.
+    const res = await fetch("/__admin", {
+      method: "POST",
+      headers,
+      credentials: "same-origin",
+      body: JSON.stringify({ action, ...body }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 403 && !retried) {
+        state.token = "";
+        sessionStorage.removeItem("s2h_token");
+        if (promptLogin()) return api(action, body, true);
+        throw new Error("Login cancelled");
+      }
+      throw new Error(data.error || ("HTTP " + res.status));
+    }
+    // Cookie is set by the server on successful token login; cache is no
+    // longer needed.
+    if (state.token) { sessionStorage.removeItem("s2h_token"); state.token = ""; }
+    return data;
+  }
+
+  async function logout() {
+    try { await api("logout"); } catch { /* clearing below regardless */ }
+    sessionStorage.removeItem("s2h_token");
+    state.token = "";
+    document.cookie = "s2h_session=; Max-Age=0; Path=/";
+    toast("Logged out");
+    $("mode").innerHTML = '<span class="pill down">logged out</span>';
+  }
+
+  function toast(text, err = false) {
+    let el = $("msg");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "msg";
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.className = err ? "err" : "";
+    clearTimeout(toast.t);
+    toast.t = setTimeout(() => el.remove(), 3500);
+  }
+
+  async function copyText(id, get) {
+    const text = typeof get === "function" ? get() : $(id).textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Copied");
+    } catch {
+      toast("Copy failed — select the text instead", true);
+    }
+  }
+
+  async function load() {
+    try {
+      const s = await api("status");
+      const pill = s.mode === "none"
+        ? '<span class="pill down">down</span>'
+        : '<span class="pill' + (s.mode === "codespace" ? "" : " warp") + '">' + s.mode + "</span>";
+      $("mode").innerHTML = pill;
+      $("exitIp").textContent = s.exitIp || "—";
+
+      // Family badge: which stack egress actually used.
+      const fam = (s.family || "unknown").toLowerCase();
+      const badge = $("family");
+      badge.textContent = fam === "ipv4" ? "IPv4" : fam === "ipv6" ? "IPv6" : "—";
+      badge.className = "proto" + (fam === "ipv4" ? " v4" : fam === "ipv6" ? " v6" : "");
+
+      // Both addresses when the exit is dual-stack, so a v6-capable exit is
+      // visible rather than hidden behind the v4-preferred display.
+      const rows = [];
+      if (s.ipv4) rows.push("<span>IPv4 <b>" + s.ipv4 + "</b></span>");
+      if (s.ipv6) rows.push("<span>IPv6 <b>" + s.ipv6 + "</b></span>");
+      const addrBox = $("addrs");
+      addrBox.innerHTML = rows.join("");
+      addrBox.hidden = rows.length === 0;
+      $("rotateUrl").textContent = s.rotateUrl || "http://127.0.0.1:" + location.port + "/__rotate";
+      $("cfgPath").textContent = s.configPath || "config.json";
+      $("ghTokens").value = (s.ghTokensRaw || []).join("\n");
+      $("csFallback").checked = !!s.csFallback;
+      state.token = s.rotateTokenFull || "";
+      if (state.token && $("rotateToken").dataset.hidden !== "true") {
+        $("rotateToken").textContent = state.token;
+      }
+    } catch (e) {
+      $("mode").innerHTML = '<span class="pill down">unreachable</span>';
+      toast(e.message, true);
+    }
+  }
+
+  $("rotateBtn").addEventListener("click", async () => {
+    $("rotateBtn").disabled = true;
+    $("rotateBtn").textContent = "Rotating…";
+    try {
+      const r = await api("rotate-now");
+      toast("Rotated " + r.oldIp + " → " + r.newIp);
+      clearTimeout(toast.t); toast.t = setTimeout(load, 600);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      $("rotateBtn").disabled = false;
+      $("rotateBtn").textContent = "Rotate exit IP";
+    }
+  });
+
+  $("ipcheckBtn").addEventListener("click", async () => {
+    $("ipcheckBtn").disabled = true;
+    try { const r = await api("ipcheck"); $("exitIp").textContent = r.ip || "—"; toast("Verified: " + r.ip); }
+    catch (e) { toast(e.message, true); }
+    finally { $("ipcheckBtn").disabled = false; }
+  });
+
+  $("exitIp").addEventListener("click", () => copyText(null, () => $("exitIp").textContent));
+
+  document.querySelectorAll("[data-copy]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const id = b.dataset.copy;
+      copyText(null, () => ($("rotateToken").dataset.hidden === "true" ? state.token : $(id).textContent));
+    })
+  );
+
+  $("tokenToggle").addEventListener("click", async () => {
+    const el = $("rotateToken");
+    if (el.dataset.hidden === "true") {
+      if (!state.token && !state.hiddenFull) {
+        // Cookie session, not the rotate token, drives this read.
+        try {
+          const r = await api("reveal");
+          state.hiddenFull = r.token;
+        } catch (e) {
+          toast(e.message, true);
+          return;
+        }
+      }
+      el.textContent = state.hiddenFull || state.token;
+      el.dataset.hidden = "false";
+      $("tokenToggle").textContent = "Hide";
+    } else {
+      el.textContent = "••••••••••••••••";
+      el.dataset.hidden = "true";
+      $("tokenToggle").textContent = "Reveal";
+    }
+  });
+
+  $("tokenGen").addEventListener("click", async () => {
+    if (!confirm(_("regen-confirm"))) return; // local page; dialog shown inline below if blocked
+    try {
+      const r = await api("set-rotate-token", { token: "" });
+      state.token = r.rotateToken;
+      $("rotateToken").textContent = state.token;
+      $("rotateToken").dataset.hidden = "false";
+      $("tokenToggle").textContent = "Hide";
+      toast("Token regenerated — update it in 9router");
+    } catch (e) { toast(e.message, true); }
+  });
+  function _(s) { return { "regen-confirm": "Regenerate the rotate token? The old one stops working; 9router needs the new value." }[s]; }
+
+  $("saveGhBtn").addEventListener("click", async () => {
+    try {
+      const tokens = $("ghTokens").value.split("\n").map((t) => t.trim()).filter(Boolean);
+      await api("set-gh-tokens", { tokens, csFallback: $("csFallback").checked });
+      toast("Saved " + tokens.length + " account(s)");
+    } catch (e) { toast(e.message, true); }
+  });
+
+  $("saveProxyBtn").addEventListener("click", async () => {
+    try {
+      await api("set-proxy-auth", { user: $("proxyUser").value.trim(), pass: $("proxyPass").value });
+      toast("Proxy credentials saved (restart to apply)");
+    } catch (e) { toast(e.message, true); }
+  });
+
+  const logoutBtn = document.createElement("button");
+  logoutBtn.className = "ghost small";
+  logoutBtn.textContent = "Log out";
+  logoutBtn.style.cssText = "position:fixed; top:env(safe-area-inset-top, 0px); right:16px; margin-top:10px";
+  logoutBtn.addEventListener("click", logout);
+  document.body.appendChild(logoutBtn);
+
+  load();
+  </script>
+</body>
+</html>

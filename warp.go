@@ -25,15 +25,58 @@ import (
 
 const (
 	wgcfVersion             = "2.3.1"
-	wgcfSHA256              = "e222fd9443d7cb3264d825a3e86967797fc9c938507c5d93e3cc21e4aed11dcc"
 	wireproxyVersion        = "1.1.3"
-	wireproxyArchiveSHA256  = "bce041ea9fe0f8a3351301dcbe29cdf6a523bb25cf9c62f17ebb5699a8051d0f"
-	wireproxyBinarySHA256   = "b176b561fd8bf15d828fcab484cfd5b4fb941cb9f61807901ca64b955af27e1f"
 	maxDownloadSize         = 50 << 20
 	maxBinarySize           = 100 << 20
 	warpStartupTimeout      = 30 * time.Second
 	warpTraceRequestTimeout = 20 * time.Second
 )
+
+// warpBinaryManifest holds, per target platform, the release-asset names and
+// SHA-256 pins for wgcf (plain binary) and wireproxy (tar.gz archive). The
+// archive hashes pin the download; the binary hashes verify what was
+// extracted, so a corrupted batch or a renamed archive is caught either way.
+// Values read from each project's checksums.txt at pin time (2026-10-30).
+type warpBinarySet struct {
+	wgcfAsset      string
+	wgcfSHA256     string
+	wireproxyAsset string // tar.gz
+	archiveSHA256  string
+	binarySHA256   string
+}
+
+var warpBinaries = map[string]warpBinarySet{
+	"windows/amd64": {
+		wgcfAsset:      "wgcf_2.3.1_windows_amd64.exe",
+		wgcfSHA256:     "e222fd9443d7cb3264d825a3e86967797fc9c938507c5d93e3cc21e4aed11dcc",
+		wireproxyAsset: "wireproxy_windows_amd64.tar.gz",
+		archiveSHA256:  "bce041ea9fe0f8a3351301dcbe29cdf6a523bb25cf9c62f17ebb5699a8051d0f",
+		binarySHA256:   "b176b561fd8bf15d828fcab484cfd5b4fb941cb9f61807901ca64b955af27e1f",
+	},
+	"linux/amd64": {
+		wgcfAsset:      "wgcf_2.3.1_linux_amd64",
+		wgcfSHA256:     "4fb7a136aa470ece11d17949c7db07b040ec9c604742dc8680bcf1889f85d0c8",
+		wireproxyAsset: "wireproxy_linux_amd64.tar.gz",
+		archiveSHA256:  "e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a444f51c",
+		binarySHA256:   "70ae5e52223dac7974af8d98a321f14a0e1689d2b14655ebc8dadfa1ec69466d",
+	},
+	"linux/arm64": {
+		wgcfAsset:      "wgcf_2.3.1_linux_arm64",
+		wgcfSHA256:     "710ab2d8ac145d81a4cf0c11bdb0e05914f77ae2a45f67b87e718d84b4cb7301",
+		wireproxyAsset: "wireproxy_linux_arm64.tar.gz",
+		archiveSHA256:  "19bbc5571f8f7a00e35f6f0d653201f25de2ce1a25659e4a45fb9e00929c954c",
+		binarySHA256:   "5852e32671afb8918c39c59330b85f833c187ed41b6b1f683c90b6bfd320f3fa",
+	},
+}
+
+func warpBinarySetFor() (warpBinarySet, error) {
+	key := runtime.GOOS + "/" + runtime.GOARCH
+	bs, ok := warpBinaries[key]
+	if !ok {
+		return warpBinarySet{}, fmt.Errorf("the -warp mode does not support %s; supported: windows/amd64, linux/amd64, linux/arm64", key)
+	}
+	return bs, nil
+}
 
 func warpConfigDir() (string, error) {
 	configDir, err := os.UserConfigDir()
@@ -48,8 +91,9 @@ func warpConfigDir() (string, error) {
 }
 
 func startWarp(ctx context.Context, promptForTerms bool) (proxy.ContextDialer, func(), error) {
-	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
-		return nil, nil, fmt.Errorf("the -warp mode currently supports Windows amd64 only")
+	bs, err := warpBinarySetFor()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	configDir, err := warpConfigDir()
@@ -57,12 +101,12 @@ func startWarp(ctx context.Context, promptForTerms bool) (proxy.ContextDialer, f
 		return nil, nil, err
 	}
 
-	wgcfPath := filepath.Join(configDir, "wgcf.exe")
-	wireproxyPath := filepath.Join(configDir, "wireproxy.exe")
-	if err := ensureWGCF(wgcfPath); err != nil {
+	wgcfPath := filepath.Join(configDir, "wgcf"+exeSuffix())
+	wireproxyPath := filepath.Join(configDir, "wireproxy"+exeSuffix())
+	if err := ensureWGCF(wgcfPath, bs); err != nil {
 		return nil, nil, err
 	}
-	if err := ensureWireproxy(wireproxyPath); err != nil {
+	if err := ensureWireproxy(wireproxyPath, bs); err != nil {
 		return nil, nil, err
 	}
 
@@ -246,22 +290,20 @@ func (w *warpManager) rotate(ctx context.Context) (string, string, error) {
 	return oldIP, eg.address(), nil
 }
 
-func ensureWGCF(path string) error {
-	url := "https://github.com/ViRb3/wgcf/releases/download/v" + wgcfVersion +
-		"/wgcf_" + wgcfVersion + "_windows_amd64.exe"
-	return installVerifiedBinary(path, url, wgcfSHA256)
+func ensureWGCF(path string, bs warpBinarySet) error {
+	url := "https://github.com/ViRb3/wgcf/releases/download/v" + wgcfVersion + "/" + bs.wgcfAsset
+	return installVerifiedBinary(path, url, bs.wgcfSHA256)
 }
 
-func ensureWireproxy(path string) error {
-	url := "https://github.com/windtf/wireproxy/releases/download/v" + wireproxyVersion +
-		"/wireproxy_windows_amd64.tar.gz"
+func ensureWireproxy(path string, bs warpBinarySet) error {
+	url := "https://github.com/windtf/wireproxy/releases/download/v" + wireproxyVersion + "/" + bs.wireproxyAsset
 	if _, err := os.Stat(path); err == nil {
-		return verifyFileSHA256(path, wireproxyBinarySHA256)
+		return verifyFileSHA256(path, bs.binarySHA256)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("check wireproxy binary: %w", err)
 	}
 
-	archive, err := downloadVerified(url, wireproxyArchiveSHA256, maxDownloadSize)
+	archive, err := downloadVerified(url, bs.archiveSHA256, maxDownloadSize)
 	if err != nil {
 		return fmt.Errorf("download wireproxy v%s: %w", wireproxyVersion, err)
 	}
@@ -269,13 +311,22 @@ func ensureWireproxy(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyBytesSHA256(binary, wireproxyBinarySHA256); err != nil {
+	if err := verifyBytesSHA256(binary, bs.binarySHA256); err != nil {
 		return fmt.Errorf("verify wireproxy binary from archive: %w", err)
 	}
 	if err := writeExecutable(path, binary); err != nil {
 		return fmt.Errorf("install wireproxy: %w", err)
 	}
 	return nil
+}
+
+// exeSuffix keeps the on-disk names obvious on Windows while staying extension-
+// free everywhere else; the manifest supplies the release asset, not the file.
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }
 
 func installVerifiedBinary(path, url, expectedSHA256 string) error {
